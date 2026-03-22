@@ -1,0 +1,597 @@
+---
+title: "Intro to R workshop, Day 2: Data exploration, analysis, and visualization"
+author: "Jess Kunke and Angie Reed"
+date: "29 June 2023"
+format: 
+  html:
+    toc: true
+    theme: cosmo
+    highlight: haddock
+    number_sections: true
+embed-resources: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE,
+                      tidy = TRUE, tidy.opts = list(width.cutoff = 82))
+```
+
+
+
+# Motivation for today's lessons
+
+Today we're working on data exploration, analysis, and visualization in R, and to motivate our work we'll use the following running example.
+
+The focus of the Water Resources Program is monitoring the area of the Meduxnekeag River Watershed that is located in Southern Aroostook County, Maine. This area is part of the Wolastoq (St. John River) system that flows through Canada and into the Bay of Fundy. The Meduxnekeag Watershed is approximately 514 square miles in area, with approximately 915 miles of streams and brooks. The Meduxnekeag River headwaters begin at Meduxnekeag Lake (aka Drews Lake), and consists of three branches within the watershed: Meduxnekeag mainstem, North Branch, and the South Branch. From Drews Lake, the mainstem flows approximately 11 miles north - northeast to the confluence with the South Branch in Houlton, and flows approximately 8 miles through the town of Houlton through HBMI tribal lands and flows to the Wolastoq/St. John River in Canada. Land uses are predominantly forestry and agricultural, with urban and commercial areas concentrated in Houlton proper. There are two point-source dischargers within the watershed located on the mainstem. A starch factory located 10 miles downstream from the headwaters, one waste-water treatment plant located approximately 16 miles from the headwaters approximately 2.3 miles upstream from tribal lands. These classifications are in place to maintain healthy rivers and streams and to continue to move forward in protecting waterways.
+
+A key initial question that we want to ask is, **do water quality parameters such as temperature, pH, specific conductivity and dissolved oxygen change with stream flow?**  If so, how, and what are the implications?  We can also include local water quality standards on the plots to see how the observed values compare.
+
+To address this, we will look at data on these variables from two different sources: USGS for the stream flow and water quality measurements from the Houlton Band of Maliseet Indians for site 18.9 MDX using a multiparameter sonde that collects measurements every half hour.
+
+The main skills we will learn/practice in this tutorial:
+
+- Reading data into R from a csv file
+- Reading data into R from the `dataRetrieval` package
+- Data manipulation with `tidyverse`: `mutate`, `group_by`, and `summarize`
+- Joining two datasets
+- Making plots of time series data that has multiple variables
+
+
+# Data set 1: Water quality (`mutate` and testing your code)
+
+First, we'll load the libraries (also called packages) we'll use in this lesson.
+
+```{r load libraries}
+## First, install whichever of these you don't already have installed
+# install.packages("knitr")
+# install.packages("plotly")
+# install.packages("tidyverse")
+# install.packages("dataRetrieval")
+# install.packages("lubridate")
+
+library(knitr)
+library(plotly)
+library(tidyverse) # <- this is actually a whole suite of packages
+library(dataRetrieval)
+library(lubridate)
+```
+
+```{r clean water quality data once, echo=FALSE, eval=FALSE}
+# we'd like to show how to do this data cleaning too, but first we'll start
+#  with tidy data and maybe we'll get to this at the end or save it for the
+#  advanced R workshop
+
+# data file name
+f <- "HBMI-18.9-WQ-20220601 to 20220913.csv"
+
+# read in the row of parameter names
+parmlist <- read_csv(f, skip = 1, n_max=1, col_names = FALSE)
+
+# read in the row of unit names
+unitlist <- read_csv(f, skip = 2, n_max=1, col_names = FALSE)
+unitlist <- str_replace_na(unitlist) # since replacement="NA" is default, don't need to specify
+
+# combine the parameter and unit names
+parm_unit <- map2_dfc(parmlist, unitlist, ~ str_c(.x, .y, sep = "_"))
+# remove the unicode replacement character that gets added in place of the
+#   degree symbol in temperature column
+parm_unit <- str_remove(parm_unit, '\uFFFD')
+# remove the $% before each unit
+parm_unit <- sub("\\$+%", "", parm_unit)
+# rename the first entry in parm_unit
+parm_unit[1] <- "DateTime"
+
+# print(paste("Reading in data from", f)) - include this?
+# use the parm_unit as the column names for reading in the data set
+data <- read_csv(f, skip = 3, col_names = parm_unit)
+#colnames(data)
+data$DateTime <- as.POSIXct(data$DateTime, format="%m/%d/%Y %H:%M", tz="UTC")
+
+data <- data %>%
+  select("DateTime","Temperature_C","Specific Cond_mS/cm",
+         "pH_pH","Optical DO_%","Optical DO_mg/l")
+
+write_csv(data, "water_quality_data.csv")
+```
+
+We have the water quality data in a comma separated values (csv) file, so we can read that in using the function `read_csv` which comes with `tidyverse`.
+
+```{r water quality data}
+water.quality <- read_csv("water_quality_data.csv")
+```
+
+Let's take a quick look at the data set to see how many observations we have and what variables we have.
+
+```{r look at wq data}
+str(water.quality)
+summary(water.quality)
+```
+
+Do you notice any unusual values? For which variables? What do you think it means, and what should we do about it?
+
+In this case, the values of $-1\times 10^6$ are missing values, so let's replace them with NAs. To do this we will use `mutate`, which is a very flexible function that lets us change (mutate) variable values or create new variables. Before we use `mutate` to change the NAs, let's get a feel for this function with some simpler examples:
+
+```{r add variables}
+# let's create a new column with temperatures in Fahrenheit
+wq2 <- mutate(water.quality, Temperature_F = (Temperature_C * 9/5) + 32)
+# view the data in whatever way you want to check
+# ...
+
+# let's replace certain values using the ifelse function
+wq2 <- mutate(water.quality, DO_status = ifelse(`Optical DO_mg/l` < 3,
+                                                "DO too low", "DO meets standard"))
+# view the data in whatever way you want to check
+# ...
+```
+
+Now let's change those values of $-1\times 10^6$ to NAs using one line of code:
+
+```{r change nonsensical values to NA}
+water.quality <- mutate(water.quality, across(where(is.numeric), ~ na_if(., -1e6)))
+summary(water.quality)
+```
+
+Good, no more values of $-1\times 10^6$! But how do we know that what we just did **really** did what we wanted? For example, what if we just deleted those whole rows or replaced some other values too that we didn't want to replace? Sometimes before you try out a new function on a big data set like this where it's hard to tell if it worked the way you wanted, it's helpful to **first try it on a much smaller and easier-to-check example that you create for testing purposes**. For example,
+
+```{r small test data set}
+# let's start with a smaller data set by taking a subset of our data
+mytestdata <- slice_head(water.quality, n=6)
+# now let's set some values to -1e6:
+mytestdata$Temperature_C[2] <- -1e6
+mytestdata$pH_pH[3] <- -1e6
+mytestdata$pH_pH[5] <- -1e6
+mytestdata$`Specific Cond_mS/cm`[3] <- -1e6
+# view the data in whatever way you want to check
+# ...
+# Now let's try out our code
+mytestdata <- mutate(mytestdata, across(where(is.numeric), ~ na_if(., -1e6)))
+# view the data in whatever way you want to check that it worked!
+# ...
+```
+
+
+# Data set 2: Stream flow (more `tidyverse`, and `dataRetrieval`)
+
+We'll also read in USGS stream discharge (stream flow, in cubic feet per second) and stream temperature data from the Lowery Bridge gauge station using the `readNWISuv` function from the `dataRetrieval` package, which allows you to pull data directly from USGS into R. For more on this package, see our Further Resources section below.
+
+```{r stream flow data}
+siteNo <- "01018035" #Lowery bridge
+
+#For a full list of pCodes see #https://help.waterdata.usgs.gov/code/parameter_cd_query?fmt=rdb&inline=true&group_cd=%
+#00060 is discharge
+#00010 is stream temperature in Celcius
+pCodes <- c("00060","00010")
+
+start.date <- "2022-01-01"
+end.date <- "2022-12-31"
+
+# load the instantaneous measurements
+streamflow <- readNWISuv(siteNumbers = siteNo,
+                         parameterCd =  pCodes,
+                         startDate = start.date,
+                         endDate = end.date)
+```
+
+If we look at the names of these variables (columns), though, they're a bit mystifying:
+
+```{r look at var names}
+head(streamflow) # this is just one of many ways to see variable names
+names(streamflow)
+```
+
+To make the column names more sensible, we can use the function `renameNWISColumns`:
+
+```{r rename vars}
+streamflow <- renameNWISColumns(streamflow)
+names(streamflow)
+```
+
+Let's rename the `dateTime` column to match the corresponding column in `water.quality`, since they're the same variable and format and we'll want to use them to match up observations later:
+
+```{r rename dateTime}
+streamflow <- rename(streamflow, DateTime=dateTime)
+names(streamflow)
+```
+
+We don't need all of these columns, so we can now select just the ones we want:
+
+```{r select vars}
+streamflow <- select(streamflow, DateTime, Flow_Inst)
+names(streamflow)
+```
+
+Notice that it's kind of annoying that we have to keep typing `streamflow <- some_function_of(streamflow, ...)`.  When we're figuring out what we want to do to the data, it's often still helpful to do commands one by one like this. However, as you figure out the flow of how you want to clean or process the data, you can combine them using **pipes** to reduce the amount of typing and also make the code easier to read.  The pipe symbol is `%>%`, like an arrow showing the direction of flow of the code.  Here's the pipe version of the two commands we just did, so instead of doing those two separate commands you could run this little chunk of code:
+
+```{r combine with pipes, eval=FALSE}
+streamflow <- streamflow %>% # Control - Shift - m
+  renameNWISColumns() %>%
+  rename(DateTime=dateTime) %>%
+  select(DateTime, Flow_Inst)
+```
+
+However, notice that you'll get an error if you try to run this chunk of code after having done the three separate commands unless you first regenerate the original `streamflow` data frame:
+
+```{r final renaming workflow}
+# load the instantaneous measurements
+streamflow <- readNWISuv(siteNumbers = siteNo,
+                         parameterCd =  pCodes,
+                         startDate = start.date,
+                         endDate = end.date)
+
+streamflow <- streamflow %>%
+  renameNWISColumns() %>%
+  rename(DateTime=dateTime) %>%
+  select(DateTime, Flow_Inst)
+```
+
+Why is that? (We can discuss.)
+
+Notice that the first argument `streamflow` is gone from all these lines now. The way to read this code is that we take streamflow, pass it to the `renameNWISColumns` function, then pass the output from that to the `rename` function, then pass the output of that to the `select` function, then store the final output (our modified data frame) as `streamflow` (in other words, we update `streamflow` by replacing it with this modified data frame).
+
+Also notice that we dropped all the `names(streamflow)` commands. There are a lot of commands like this that we use while we're working out the code we want to use to check that we're doing what we want to be doing, but we don't need to run these commands again when we run the code start to finish later for our data processing/analysis.
+
+# Data set 1: Summary statistics
+
+Now that we've started to get a hang of piping, let's try another useful pairing: `group_by` and `summarize`. Suppose we want to look at how many times temperature, pH, and DO are too high or too low over the course of the year.
+
+```{r wq stats}
+wq.stats <- water.quality %>% 
+  # Create a month column in which we extract the month from the DateTime column
+  mutate(Month = month(DateTime)) %>%
+  # Group by month, so that we summarize exceedances by month
+  group_by(Month) %>% 
+  mutate(TempAbove22.2 = (Temperature_C > 22.2), 
+         TempAbove25.6 = (Temperature_C > 25.6),
+         pHBelow7 = (pH_pH < 7),
+         pHAbove8.5 = (pH_pH > 8.5),
+         DOBelow7 = (`Optical DO_mg/l` < 7)) %>% 
+  summarize(TempAbove22.2 = sum(TempAbove22.2),
+            TempAbove25.6 = sum(TempAbove25.6),
+            pHBelow7 = sum(pHBelow7),
+            pHAbove8.5 = sum(pHAbove8.5),
+            DOBelow7 = sum(DOBelow7))
+
+# make a quick but relatively nicely formatted table
+kable(wq.stats)
+```
+
+Almost what we want! However, notice there are some NAs. This is because by default, the `sum` function returns NA if any of the values it's adding together are NAs. To correct this, we change `sum(...)` to `sum(..., na.rm=TRUE)`:
+
+```{r wq stats with na.rm TRUE}
+wq.stats <- water.quality %>% 
+  # Create a month column in which we extract the month from the DateTime column
+  mutate(Month = month(DateTime)) %>%
+  # Group by month, so that we summarize exceedances by month
+  group_by(Month) %>% 
+  mutate(TempAbove22.2 = (Temperature_C > 22.2), 
+         TempAbove25.6 = (Temperature_C > 25.6),
+         pHBelow7 = (pH_pH < 7),
+         pHAbove8.5 = (pH_pH > 8.5),
+         DOBelow7 = (`Optical DO_mg/l` < 7)) %>% 
+  summarize(TempAbove22.2 = sum(TempAbove22.2, na.rm=TRUE),
+            TempAbove25.6 = sum(TempAbove25.6, na.rm=TRUE),
+            pHBelow7 = sum(pHBelow7, na.rm=TRUE),
+            pHAbove8.5 = sum(pHAbove8.5, na.rm=TRUE),
+            DOBelow7 = sum(DOBelow7, na.rm=TRUE))
+
+# make a quick but relatively nicely formatted table
+kable(wq.stats)
+```
+
+There are other things we could add to this table; for example, sometimes you want to know how many values were included in the sum.  For instance, if there were no exceedances but also most of the data was NAs, that is different from if there were no exceedances and you have no missing or corrupted data.
+
+
+# Data set 2: Making some initial plots
+
+Let's see how to make some simple plots.  To start, let's plot the dissolved oxygen time series. We'll use the `ggplot` function, which can seem a little strange at first because the only inputs we give to `ggplot` are the data set and some settings (which they call aesthetics or `aes` for short) such as which variables should be on which axes. Everything else we do afterward, building the plot line by line with a `+` symbol in between each command:
+
+```{r first plot, tidy=FALSE}
+ggplot(water.quality, aes(x=DateTime, y=`Optical DO_%`)) +
+  geom_line()
+```
+
+Nice! Short code, and we already have a lot of what we want. Let's correct the axis labels:
+
+```{r better axis labels, tidy=FALSE}
+ggplot(water.quality, aes(x=DateTime, y=`Optical DO_%`)) +
+  geom_line() +
+  xlab("Time") + ylab("Optical DO (%)")
+```
+
+Notice that if you just type the code as above, it will print the graph, but if you want to modify it further you have to retype the code. Alternatively, you can store the code under some name, like `DO.ts`, and then add just the additional lines of code like this:
+
+```{r name the plot, tidy=FALSE}
+DO.ts <- ggplot(water.quality, aes(x=DateTime, y=`Optical DO_%`)) +
+  geom_line()
+
+DO.ts <- DO.ts +
+  xlab("Time") + ylab("Optical DO (%)")
+```
+
+Notice that if you take this route, it doesn't automatically display the plot, but you can do that by just typing the name of the plot:
+
+```{r show plot, tidy=FALSE}
+DO.ts
+```
+
+or using the `print` function:
+
+```{r print plot, tidy=FALSE}
+print(DO.ts)
+```
+
+You can also save the image to file using the function `ggsave` after using the `print` function.
+
+Let's go one step further. Using the package `plotly`, we can actually make an interactive graph that allows us to hover over the graph, see the values or coordinates of individual points, zoom out, pan around, and more, all of which is very helpful in data exploration and quality control:
+
+```{r ggplotly, tidy=FALSE}
+DO.ts <- ggplot(water.quality, aes(x=DateTime, y=`Optical DO_%`)) +
+  geom_line() +
+  xlab("Time") + ylab("Optical DO (%)")
+
+ggplotly(DO.ts)
+```
+
+# Joining the two data sets
+
+We have a bunch of water quality measurements in one data set, and a bunch of stream flow measurements in the other, all at the same location.  In both data sets, each row corresponds to a particular date and time. In order to combine the data sets so that each row has both water quality and stream flow measurements, we will do what is called a **join**. There are few types of joins, depending on which data you want to keep in the end; [this page](https://csiro-data-school.github.io/r/10-Data-Verbs---join/index.html) has some really nice animations to help you visualize and understand the different types of joins.
+
+To figure out what kind of join we want, one thing we want to consider is the date range represented by each data set. What is the answer to that? Is one contained within the other, or do they just overlap? Are we interested in the full date range, including dates that we have only one or the other type of data, or do we want only dates for which we have both types of measurements? How many observations do we have in each data set?
+
+Let's try `full_join`:
+
+```{r full_join1, eval=FALSE}
+combined <- full_join(water.quality, streamflow, by=DateTime)
+```
+
+Oops! What went wrong? If we look at the help page `?full_join`, we see that the `by` argument expects a "character vector", meaning it wants `DateTime` in quotes (the vector part means that we could join the data based on more than one variable, in which case we'd need a vector like `c("DateTime", "OtherVariable")`):
+
+```{r full_join2}
+combined <- full_join(water.quality, streamflow, by="DateTime")
+```
+
+How many observations are in `combined`? Does that make sense?
+
+Let's do the left join instead:
+
+```{r left_join}
+combined <- left_join(water.quality, streamflow, by="DateTime")
+```
+
+Now how many observations are in `combined`?
+
+# The joy of pivoting, `facet_wrap`, and `facet_grid`
+
+Great, now that the data sets are joined, we can make plots like before to see how each water quality variable varies with stream flow. One way to do this is to make five separate plots; that's a lot of extra code when we're trying to do basically the same thing for each plot. Another way to do it is to plot all the variables on a single plot, with stream flow on the x-axis and the other five variables on the y-axis:
+
+```{r ggplot same graph same colors, tidy=FALSE}
+ggplot(combined, aes(x=DateTime)) +
+  geom_line(aes(y=Flow_Inst)) +
+  geom_line(aes(y=Temperature_C)) +
+  geom_line(aes(y=`Specific Cond_mS/cm`)) +
+  geom_line(aes(y=pH_pH)) +
+  geom_line(aes(y=`Optical DO_%`)) +
+  xlab("Time")
+```
+
+Oof, that's not very useful. Which line is which?
+
+```{r ggplot same graph different colors, tidy=FALSE}
+ggplot(combined, aes(x=DateTime)) +
+  geom_line(aes(y=Flow_Inst, color = "green")) +
+  geom_line(aes(y=Temperature_C, color="blue")) +
+  geom_line(aes(y=`Specific Cond_mS/cm`, color="red")) +
+  geom_line(aes(y=pH_pH, color="orange")) +
+  geom_line(aes(y=`Optical DO_%`)) +
+  xlab("Time")
+```
+
+Okay, that's a little better. They're all on such different scales, though. Is it very useful to have them on the same graph like this? Also, we still had to do some repetitive typing by explicitly specifying each variable as its own `geom_line.` What if we had 20 variables? And we still need to fix the legend.
+
+Often a more efficient and more useful way to plot multiple variables is to first use something called **pivoting**. [This link](https://fromthebottomoftheheap.net/2019/10/25/pivoting-tidily/) and [this link](https://www.garrickadenbuie.com/project/tidyexplain/#pivot-wider-and-longer) have nice animations to help us visualize how pivoting works. The basic idea is that sometimes we want to work with data in "wide" format and other times we want to work with it in "long" format, and moving from one to the other is called pivoting.
+
+Right now we have data in wide format, with a separate column for each variable. For most of what we've done so far, that's exactly what we needed. Now, it will help us to pivot to long format, in which we'll have just one of these variables in each row, in addition to `DateTime`. We'll create a new column called, say, "Parameter", whose value will be "Temperature_C", or "pH_pH", etc. This long-format data table will have just three columns, then: DateTime, Parameter, and Value, which is the measurement value of whatever parameter is represented in that row. Let's take a look:
+
+```{r pivot the data}
+combined.long <- pivot_longer(combined,
+                              cols = -c(DateTime),
+                              names_to = "Parameter",
+                              values_to = "Value")
+```
+
+Note: Don't worry about memorizing `pivot_longer` and `pivot_wider`. Most of us (today's instructors included) still have to look up one detail or another every time we use pivoting, but you'll remember enough to look up what you need when you need it! And you'll have these notes to refer back to as well.
+
+First note that to make the same graph as earlier, with all the variables on one plot, it's less code now, which means less opportunity for typos and frustrating debugging:
+
+```{r first graph of pivoted data, tidy=FALSE}
+ggplot(combined.long, aes(x=DateTime, y=Value, color=Parameter)) +
+  geom_line() +
+  xlab("Time")
+```
+
+Notice the legend also makes more sense now. Furthermore, we can separate the variables into separate subplots or **facets** using `facet_wrap`:
+
+```{r facet_wrap plot, tidy=FALSE}
+ggplot(combined.long, aes(x=DateTime, y=Value)) +
+  geom_line() +
+  xlab("Time") +
+  facet_wrap(.~Parameter, scales="free") +
+  theme(legend.position = "none")
+```
+
+Alternatively we could use `facet_grid` to align them all on the same x-axis.
+
+```{r facet_grid plot, tidy=FALSE}
+ggplot(combined.long, aes(x=DateTime, y=Value, color=Parameter)) +
+  geom_line() +
+  xlab("Time") +
+  facet_grid(Parameter~., scales="free") +
+  theme(legend.position = "none")
+```
+
+Another time you might want to use `facet_grid` instead of `facet_wrap` is if you would like the panels to be grouped horizontally by one variable and vertically by another. For example, maybe you have samples from three different rivers and you measure the same four variables in each river. You could make a 3x4 plot (12 panels) in which each row corresponds to one of the rivers and each column corresponds to one of the variables. For this you would need to use `facet_grid` instead of `facet_wrap`.
+
+There are lots of aesthetic settings you can use via `theme` and the specific themes that already exist for ggplot. In the following example, I've changed the facet/panel labels and changed the theme. Note: it's often nicer to work with character-type variables as factor-type, which is why I have changed the type of the Parameter column to factor:
+
+```{r theme, tidy=FALSE, fig.width=8, fig.height=10}
+# we'll make the parameter column a factor variable
+combined.long$Parameter <- as.factor(combined.long$Parameter)
+# check out its levels:
+levels(combined.long$Parameter)
+
+# use unique(combined.long$Parameter) to see what the current parameter names are
+param.labs <- c("Stream flow (cf/s)", "Optical DO (%)", "Optical DO (mg/l)",
+                "pH", "Spec. Conductivity (mS/cm)", "Temperature (Celcius)")
+names(param.labs) <- levels(combined.long$Parameter)
+
+final.plot = ggplot(combined.long, aes(x=DateTime, y=Value, color=Parameter)) +
+  geom_line() +
+  xlab("Time") +
+  facet_grid(Parameter~., scales="free",
+             labeller = labeller(Parameter = param.labs, # rename facet labels
+                                 group = label_wrap_gen(width=50))) +
+  theme_minimal() + # change theme
+  theme(legend.position = "none")
+
+print(final.plot)
+```
+
+You can save a plot to an image file, too:
+
+```{r save plot, eval=FALSE}
+ggsave("water_quality_plot.png", final.plot,
+       width=8, height=10, units = "in")
+```
+
+Furthermore, you can use variable names in naming your plot! Just use the `paste0` function to string things together. This is really nice if you are generating the same kind of plot for different sites or different date ranges.
+
+```{r see how paste0 works}
+paste0("water_quality_plot_", siteNo, "_", start.date, "_", end.date, ".png")
+```
+
+```{r save plot with var names, eval=FALSE}
+plot.name <- paste0("water_quality_plot_", siteNo, "_", start.date, "_", end.date, ".png")
+
+# now we'll use it
+ggsave(plot.name, final.plot,
+       width=8, height=10, units = "in")
+```
+
+One last comment: we could rename the time variable from `DateTime` to `Time` and then we wouldn't need the line `xlab("Time")` in each of our plots. Or better yet, at the very beginning we could change the line `rename(DateTime=dateTime)` to `rename(Time=dateTime)` and then change all the references to `DateTime` that occur in the code after that line to `Time`. We show these changes in the final code below.
+
+
+# Summary
+
+Some takeaways from this tutorial:
+
+- We saw the importance of taking a look at your data before analyzing and visualizing it; otherwise we wouldn't have caught the missing values.
+- When you identify a task you want to do, it's helpful to develop and test your code for that task on a much smaller and easier-to-check example. That way you can be more confident that it worked as intended.
+- We saw how to read data into R using the `dataRetrieval` package and rename the variables.
+- Coding is an iterative process. For instance, when we first made the summary stats table, we realized we needed to use `na.rm = TRUE` to exclude NAs from the calculations. When making the plots, too, we started with a simple plot and gradually build it up, improving the format and making the plot more complex.
+
+Here is an example of what your final code might look like. Note that we've added comments to explain what we're doing; this is very helpful for anyone who reads your code, including you a few months from now!
+
+```{r final code, eval=FALSE}
+# read in data
+water.quality <- read_csv("water_quality_data.csv")
+# change values of -1 x 10^6 to NA
+water.quality <- water.quality %>%
+  mutate(across(where(is.numeric), ~ na_if(., -1e6))) %>%
+  rename(Time=DateTime)
+
+siteNo <- "01018035" #Lowery bridge
+#For a full list of pCodes see #https://help.waterdata.usgs.gov/code/parameter_cd_query?fmt=rdb&inline=true&group_cd=%
+#00060 is discharge
+#00010 is stream temperature in Celcius
+pCodes <- c("00060","00010")
+start.date <- "2022-01-01"
+end.date <- "2022-12-31"
+# load the instantaneous measurements
+streamflow <- readNWISuv(siteNumbers = siteNo,
+                         parameterCd =  pCodes,
+                         startDate = start.date,
+                         endDate = end.date)
+
+# rename some columns
+streamflow <- streamflow %>%
+  renameNWISColumns() %>%
+  rename(Time=dateTime) %>%
+  select(Time, Flow_Inst)
+
+# summarize water quality stats in a table
+wq.stats <- water.quality %>% 
+  # Create a month column in which we extract the month from the DateTime column
+  mutate(Month = month(Time)) %>%
+  # Group by month, so that we summarize exceedances by month
+  group_by(Month) %>% 
+  mutate(TempAbove22.2 = (Temperature_C > 22.2), 
+         TempAbove25.6 = (Temperature_C > 25.6),
+         pHBelow7 = (pH_pH < 7),
+         pHAbove8.5 = (pH_pH > 8.5),
+         DOBelow7 = (`Optical DO_mg/l` < 7)) %>% 
+  summarize(TempAbove22.2 = sum(TempAbove22.2, na.rm=TRUE),
+            TempAbove25.6 = sum(TempAbove25.6, na.rm=TRUE),
+            pHBelow7 = sum(pHBelow7, na.rm=TRUE),
+            pHAbove8.5 = sum(pHAbove8.5, na.rm=TRUE),
+            DOBelow7 = sum(DOBelow7, na.rm=TRUE))
+
+kable(wq.stats)
+
+# join the two data sets
+combined <- left_join(water.quality, streamflow, by="Time")
+
+# pivot for plotting
+combined.long <- pivot_longer(combined,
+                              cols = -c(Time),
+                              names_to = "Parameter",
+                              values_to = "Value")
+
+# plot each variable in its own facet/panel
+ggplot(combined.long, aes(x=Time, y=Value, color=Parameter)) +
+  geom_line() +
+  facet_wrap(.~Parameter, scales="free") +
+  theme(legend.position = "none")
+
+# make the parameter column a factor variable
+combined.long$Parameter <- as.factor(combined.long$Parameter)
+# create new facet names
+param.labs <- c("Stream flow (cf/s)", "Optical DO (%)", "Optical DO (mg/l)",
+                "pH", "Spec. Conductivity (mS/cm)", "Temperature (Celcius)")
+names(param.labs) <- levels(combined.long$Parameter)
+
+final.plot <- ggplot(combined.long, aes(x=Time, y=Value, color=Parameter)) +
+  geom_line() +
+  xlab("Time") +
+  facet_grid(Parameter~., scales="free",
+             labeller = labeller(Parameter = param.labs, # apply new facet labels
+                                 group = label_wrap_gen(width=50))) +
+  theme_minimal() + # change theme
+  theme(legend.position = "none")
+
+print(final.plot)
+
+ggsave("water_quality_plot.png", final.plot,
+       width=8, height=10, units = "in")
+```
+
+
+# Further resources
+
+- [Adorable cartoons about R and tidy data]
+- [Vignette on `dataRetrieval`]
+- [Another tutorial on `dataRetrieval`]
+- [Yet another tutorial on `dataRetrieval`]
+- [Full list of parameter codes]
+
+[Adorable cartoons about R and tidy data]:
+https://allisonhorst.com/everything-else
+
+[Vignette on `dataRetrieval`]: https://owi.usgs.gov/R/dataRetrieval.html#1
+
+[Full list of parameter codes]: https://help.waterdata.usgs.gov/code/parameter_cd_query?fmt=rdb&inline=true&group_cd=%
+
+[Another tutorial on `dataRetrieval`]: https://cran.r-project.org/web/packages/dataRetrieval/vignettes/dataRetrieval.html
+
+[Yet another tutorial on `dataRetrieval`]: http://usgs-r.github.io/dataRetrieval/articles/tutorial.html
+
+

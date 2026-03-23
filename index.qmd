@@ -1,7 +1,7 @@
 ---
-title: "Intro to R workshop, Day 2: Data exploration, analysis, and visualization"
+title: "Reading, exploring, manipulating, joining, and visualizing stream gauge and water quality data"
 author: "Jess Kunke and Angie Reed"
-date: "29 June 2023"
+date: "29 June 2023, updated 22 March 2026"
 format: 
   html:
     toc: true
@@ -26,12 +26,12 @@ The focus of the Water Resources Program is monitoring the area of the Meduxneke
 
 A key initial question that we want to ask is, **do water quality parameters such as temperature, pH, specific conductivity and dissolved oxygen change with stream flow?**  If so, how, and what are the implications?  We can also include local water quality standards on the plots to see how the observed values compare.
 
-To address this, we will look at data on these variables from two different sources: USGS for the stream flow and water quality measurements from the Houlton Band of Maliseet Indians for site 18.9 MDX using a multiparameter sonde that collects measurements every half hour.
+To address this, we will look at data on these variables from two different sources: USGS for the stream flow, and water quality measurements from the Houlton Band of Maliseet Indians for site 18.9 MDX using a multiparameter sonde that collects measurements every half hour.
 
 The main skills we will learn/practice in this tutorial:
 
 - Reading data into R from a csv file
-- Reading data into R from the `dataRetrieval` package
+- Reading data into R directly from the USGS database using the [`dataRetrieval` package](https://cran.r-project.org/web/packages/dataRetrieval/vignettes/dataRetrieval.html)
 - Data manipulation with `tidyverse`: `mutate`, `group_by`, and `summarize`
 - Joining two datasets
 - Making plots of time series data that has multiple variables
